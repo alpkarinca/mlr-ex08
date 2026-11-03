@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Live leaf classifier (apple / cherry / chestnut / maple) running the leaf_model.onnx model in the browser with onnxruntime-web.">
+<title>Leaf Classifier &mdash; live camera</title>
+<style>
+  :root {
+    --bg: #10151a;
+    --card: #1a2229;
+    --line: #2c3841;
+    --fg: #eaf0f4;
+    --muted: #9fb0bd;
+    --accent: #46c37b;
+    --bar: #2f6f4b;
+    --error: #e8705f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px 16px calc(32px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 620px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  p.lead { color: var(--muted); margin: 0 0 16px; font-size: .92rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  video {
+    display: block; width: 100%; aspect-ratio: 1 / 1; background: #000;
+    border-radius: 10px; object-fit: cover;
+  }
+  #uploadPreview {
+    display: none; width: 100%; aspect-ratio: 1/1; object-fit: cover;
+    border-radius: 10px; background: #000;
+  }
+  .stage { position: relative; }
+  /* outlines the central square that is actually fed to the model */
+  .cropHint {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    aspect-ratio: 1/1; height: 100%; max-width: 100%;
+    border: 2px dashed rgba(255,255,255,.55); border-radius: 10px; pointer-events: none;
+  }
+  button, .filelabel {
+    display: inline-block; font: inherit; font-weight: 600; color: var(--fg);
+    background: #24313a; border: 1px solid var(--line); border-radius: 10px;
+    padding: 11px 14px; margin: 12px 8px 0 0; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06231a; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+  #status { font-size: .9rem; color: var(--muted); min-height: 1.3em; margin: 10px 0 0; }
+  #status.error { color: var(--error); }
+  #top { font-size: 1.25rem; font-weight: 700; margin: 0 0 12px; }
+  #top .pct { color: var(--accent); }
+  .row { display: grid; grid-template-columns: 5.5rem 1fr 5.5rem; align-items: center; gap: 10px; margin: 8px 0; }
+  .row .name { font-weight: 600; }
+  .row.top .name { color: var(--accent); }
+  .track { background: #0d1216; border: 1px solid var(--line); border-radius: 999px; height: 14px; overflow: hidden; }
+  .fill { background: var(--bar); height: 100%; width: 0%; border-radius: 999px; transition: width .15s linear; }
+  .row.top .fill { background: var(--accent); }
+  .row .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: .9rem; }
+  .row.top .val { color: var(--fg); }
+  #qrSection { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  #qr { background: #fff; padding: 10px; border-radius: 10px; line-height: 0; }
+  #qr svg, #qr img { display: block; width: 168px; height: 168px; }
+  #qrText { flex: 1 1 190px; }
+  #qrText a { color: var(--accent); word-break: break-all; font-weight: 600; }
+  small, .small { font-size: .82rem; color: var(--muted); }
+  code { background: #0d1216; padding: 1px 5px; border-radius: 5px; font-size: .85em; }
+  footer { margin-top: 24px; }
+</style>
+</head>
+<body>
+
+<h1>Leaf Classifier</h1>
+<p class="lead">
+  Point the rear camera at a leaf. The frame is preprocessed in the browser exactly as described in
+  <code>model_info.json</code> (central square crop &rarr; resize to <span id="cfgSize">96</span>&times;<span id="cfgSize2">96</span>
+  &rarr; RGB scaled to 0&ndash;1 &rarr; per-channel standardization) and run locally by the
+  <span id="cfgModel">leaf_model.onnx</span> model with onnxruntime-web. Nothing is uploaded.
+</p>
+
+<div class="card">
+  <div class="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="cropHint" id="cropHint"></div>
+    <img id="uploadPreview" alt="Uploaded leaf preview">
+  </div>
+  <button id="startBtn" class="primary">Start rear camera</button>
+  <button id="stopBtn" disabled>Stop camera</button>
+  <label class="filelabel" for="fileInput">Upload a photo instead</label>
+  <input type="file" id="fileInput" accept="image/*">
+  <p id="status">Loading model&hellip;</p>
+</div>
+
+<div class="card">
+  <h2>Class probabilities</h2>
+  <p id="top">&mdash;</p>
+  <div id="probs"></div>
+  <p class="small" id="perf"></p>
+</div>
+
+<footer class="card">
+  <h2>Open this page on your phone</h2>
+  <div id="qrSection">
+    <div id="qr">Generating QR code&hellip;</div>
+    <div id="qrText">
+      <p>Scan the QR code with the phone's camera app, or tap the link:</p>
+      <p><a id="qrLink" href="#" rel="me">loading&hellip;</a></p>
+      <p class="small" id="qrNote">QR code generated locally in your browser by <code>qrcode-generator</code> &mdash; no third-party QR service is contacted.</p>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.js"></script>
+<script>
+'use strict';
+
+/* ------------------------------------------------------------------ *
+ * Configuration: taken from model_info.json at load time.
+ * The constants below are a fallback (for example when the page is
+ * opened straight from the file system) and mirror model_info.json.
+ * ------------------------------------------------------------------ */
+const PAGE_URL = 'https://alpkarinca.github.io/mlr-ex08/';
+const ORT_CDN_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/';
+
+const CONFIG = {
+  classes: ['apple', 'cherry', 'chestnut', 'maple'],
+  input_size: 96,
+  mean: [0.485, 0.456, 0.406],
+  std: [0.229, 0.224, 0.225]
+};
+
+const video = document.getElementById('video');
+const uploadPreview = document.getElementById('uploadPreview');
+const cropHint = document.getElementById('cropHint');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const fileInput = document.getElementById('fileInput');
+const statusEl = document.getElementById('status');
+const topEl = document.getElementById('top');
+const probsEl = document.getElementById('probs');
+const perfEl = document.getElementById('perf');
+
+// Offscreen canvas used for the central-square crop + resize.
+const work = document.createElement('canvas');
+const workCtx = work.getContext('2d', { willReadFrequently: true });
+
+let session = null;
+let inputName = null;
+let outputName = null;
+let stream = null;
+let inferring = false;
+let timer = null;
+let uploadMode = false;
+let lastSource = null;
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'error' : '';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/* ---------------------------- model ------------------------------- */
+
+async function loadConfig() {
+  try {
+    const res = await fetch('model_info.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const info = await res.json();
+    if (Array.isArray(info.classes) && info.classes.length) CONFIG.classes = info.classes;
+    if (typeof info.input_size === 'number') CONFIG.input_size = info.input_size;
+    if (Array.isArray(info.mean) && info.mean.length === 3) CONFIG.mean = info.mean;
+    if (Array.isArray(info.std) && info.std.length === 3) CONFIG.std = info.std;
+  } catch (err) {
+    console.warn('model_info.json not loaded, using built-in copy:', err);
+  }
+  document.getElementById('cfgSize').textContent = CONFIG.input_size;
+  document.getElementById('cfgSize2').textContent = CONFIG.input_size;
+  work.width = CONFIG.input_size;
+  work.height = CONFIG.input_size;
+}
+
+async function loadModel() {
+  if (typeof ort === 'undefined') throw new Error('onnxruntime-web did not load (check the network / ad blocker).');
+
+  // GitHub Pages serves no COOP/COEP headers, so keep WASM single threaded.
+  ort.env.wasm.wasmPaths = ORT_CDN_BASE;
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+
+  session = await ort.InferenceSession.create('leaf_model.onnx', {
+    graphOptimizationLevel: 'all',
+    executionProviders: ['wasm']
+  });
+  inputName = session.inputNames[0];
+  outputName = session.outputNames[0];
+  console.log('model loaded:', { inputName, outputName, size: CONFIG.input_size });
+}
+
+/* -------------------------- preprocessing ------------------------- */
+
+/**
+ * Central square crop of `source` (a <video> or <img>), resized to
+ * input_size x input_size, RGB / 255, then (x - mean) / std per channel,
+ * packed as NCHW float32 with shape [1, 3, size, size].
+ */
+function tensorFromSource(source, srcW, srcH) {
+  const size = CONFIG.input_size;
+  const square = Math.min(srcW, srcH);
+  const sx = (srcW - square) / 2;
+  const sy = (srcH - square) / 2;
+
+  workCtx.imageSmoothingEnabled = true;
+  workCtx.imageSmoothingQuality = 'high';
+  workCtx.drawImage(source, sx, sy, square, square, 0, 0, size, size);
+
+  const px = workCtx.getImageData(0, 0, size, size).data; // RGBA, row-major
+  const n = size * size;
+  const data = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    for (let c = 0; c < 3; c++) {
+      data[c * n + i] = (px[o + c] / 255 - CONFIG.mean[c]) / CONFIG.std[c];
+    }
+  }
+  return new ort.Tensor('float32', data, [1, 3, size, size]);
+}
+
+/** Model output is raw logits (output tensor "linear_1"), so apply softmax. */
+function softmax(logits) {
+  let max = -Infinity;
+  for (const v of logits) if (v > max) max = v;
+  const exps = logits.map(v => Math.exp(v - max));
+  let sum = 0;
+  for (const e of exps) sum += e;
+  return exps.map(e => e / sum);
+}
+
+async function classify(source, srcW, srcH) {
+  const tensor = tensorFromSource(source, srcW, srcH);
+  const feeds = {};
+  feeds[inputName] = tensor;
+  const t0 = performance.now();
+  const results = await session.run(feeds);
+  const out = results[outputName];
+  const ms = performance.now() - t0;
+  return { probs: softmax(Array.prototype.slice.call(out.data)), ms };
+}
+
+/* ---------------------------- rendering --------------------------- */
+
+const rows = new Map();
+
+function buildRows() {
+  probsEl.innerHTML = '';
+  rows.clear();
+  for (const name of CONFIG.classes) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML =
+      '<span class="name"></span>' +
+      '<span class="track"><span class="fill"></span></span>' +
+      '<span class="val"></span>';
+    row.querySelector('.name').textContent = name;
+    probsEl.appendChild(row);
+    rows.set(name, row);
+  }
+}
+
+function fmt(p) {
+  if (p >= 0.01) return (p * 100).toFixed(1) + '%';
+  if (p >= 0.0001) return (p * 100).toFixed(3) + '%';
+  if (p > 0) return p.toExponential(1);
+  return '0%';
+}
+
+function render(probs, ms) {
+  let bestIdx = 0;
+  for (let i = 1; i < probs.length; i++) if (probs[i] > probs[bestIdx]) bestIdx = i;
+
+  CONFIG.classes.forEach((name, i) => {
+    const row = rows.get(name);
+    if (!row) return;
+    row.classList.toggle('top', i === bestIdx);
+    row.querySelector('.fill').style.width = (probs[i] * 100).toFixed(2) + '%';
+    row.querySelector('.val').textContent = fmt(probs[i]);
+  });
+
+  topEl.innerHTML = escapeHtml(CONFIG.classes[bestIdx]) +
+    ' <span class="pct">' + (probs[bestIdx] * 100).toFixed(1) + '%</span>';
+  if (ms) perfEl.textContent = 'inference ' + ms.toFixed(0) + ' ms on this device';
+  return bestIdx;
+}
+
+/* ------------------------------ loop ------------------------------ */
+
+async function runOnce() {
+  if (!session || inferring) return;
+  inferring = true;
+  try {
+    let src = null, w = 0, h = 0;
+    if (uploadMode) {
+      src = uploadPreview;
+      w = uploadPreview.naturalWidth;
+      h = uploadPreview.naturalHeight;
+    } else {
+      src = video;
+      w = video.videoWidth;
+      h = video.videoHeight;
+    }
+    if (src && w > 0 && h > 0) {
+      const { probs, ms } = await classify(src, w, h);
+      lastSource = probs;
+      window.__lastProbs = probs; // exact values, used by the automated self test
+      render(probs, ms);
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus('Inference failed: ' + err.message, true);
+  } finally {
+    inferring = false;
+  }
+}
+
+function startLoop() {
+  stopLoop();
+  const tick = async () => {
+    await runOnce();
+    timer = setTimeout(tick, 120); // keep the UI responsive on phones
+  };
+  tick();
+}
+
+function stopLoop() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+}
+
+/* ----------------------------- camera ----------------------------- */
+
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('This browser has no camera access (getUserMedia). Camera needs HTTPS - use the upload fallback below.', true);
+    return;
+  }
+  stopLoop();
+  uploadMode = false;
+  uploadPreview.style.display = 'none';
+  video.style.display = 'block';
+  cropHint.style.display = 'block';
+  startBtn.disabled = true;
+  setStatus('Requesting camera access - please tap Allow&hellip;');
+
+  const attempts = [
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: 'environment' }, audio: false },
+    { video: true, audio: false }
+  ];
+
+  let lastErr = null;
+  for (const constraints of attempts) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) {
+    startBtn.disabled = false;
+    setStatus('Camera unavailable (' + (lastErr.name || 'Error') + ': ' + lastErr.message + '). On iPhone use the upload fallback, and make sure the page is opened over HTTPS and camera access is allowed.', true);
+    return;
+  }
+
+  video.srcObject = stream;
+  video.setAttribute('playsinline', '');
+  video.muted = true;
+  try {
+    await new Promise((resolve) => {
+      if (video.videoWidth > 0) return resolve();
+      video.onloadedmetadata = () => resolve();
+      setTimeout(resolve, 4000);
+    });
+    await video.play();
+  } catch (err) {
+    console.warn('play() rejected:', err);
+  }
+
+  const track = stream.getVideoTracks()[0];
+  const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  const settings = track && track.getSettings ? track.getSettings() : {};
+  const rear = caps.facingMode && caps.facingMode.indexOf && caps.facingMode.indexOf('user') === -1
+    ? 'rear' : (settings.facingMode === 'user' ? 'front' : 'rear');
+  stopBtn.disabled = false;
+  setStatus('Classifying with the ' + rear + ' camera (' + video.videoWidth + '×' + video.videoHeight +
+            ', central square is used).');
+  startLoop();
+}
+
+function stopCamera() {
+  stopLoop();
+  if (stream) {
+    for (const t of stream.getVideoTracks()) t.stop();
+    stream = null;
+  }
+  video.pause();
+  video.srcObject = null;
+  stopBtn.disabled = true;
+  startBtn.disabled = false;
+}
+
+/* --------------------------- upload path -------------------------- */
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('the image could not be decoded'));
+    img.src = src;
+  });
+}
+
+async function showAndClassifyImage(source, label) {
+  stopCamera();
+  uploadMode = true;
+  video.style.display = 'none';
+  cropHint.style.display = 'none';
+  uploadPreview.style.display = 'block';
+  setStatus(label + ' - classifying the central square&hellip;');
+
+  const loaded = new Promise((resolve, reject) => {
+    uploadPreview.onload = resolve;
+    uploadPreview.onerror = () => reject(new Error('the image could not be decoded'));
+  });
+  uploadPreview.src = source;
+  await loaded;
+  if (uploadPreview.decode) { try { await uploadPreview.decode(); } catch (e) {} }
+  await runOnce();
+  setStatus(label + ' - result shown below (top class highlighted).');
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  if (uploadPreview.dataset.objectUrl) URL.revokeObjectURL(uploadPreview.dataset.objectUrl);
+  const url = URL.createObjectURL(file);
+  uploadPreview.dataset.objectUrl = url;
+  try {
+    await classifyImageSafely(url, 'Photo ' + file.name);
+  } catch (err) {
+    console.error(err);
+    setStatus('Could not classify that image: ' + err.message, true);
+  }
+}
+
+// small wrapper so a missing model surfaces as a readable status message
+async function classifyImageSafely(url, label) {
+  if (!session) { setStatus('Still loading the model - try again in a second.', true); return; }
+  await showAndClassifyImage(url, label);
+}
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files && fileInput.files[0];
+  handleFile(file);
+});
+startBtn.addEventListener('click', startCamera);
+stopBtn.addEventListener('click', stopCamera);
+
+// Stop the camera when the tab is hidden (iOS releases the LED / battery).
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && stream) stopCamera();
+});
+
+/* ------------------------------ QR code --------------------------- */
+
+function renderQr() {
+  const link = document.getElementById('qrLink');
+  link.href = PAGE_URL;
+  link.textContent = PAGE_URL;
+  const box = document.getElementById('qr');
+  const note = document.getElementById('qrNote');
+  if (typeof qrcode !== 'function') {
+    box.textContent = 'QR script unavailable';
+    note.textContent = 'The local QR generator could not be downloaded; the link above still works.';
+    return;
+  }
+  try {
+    const qr = qrcode(0, 'M');           // type 0 = smallest fitting size
+    qr.addData(PAGE_URL);
+    qr.make();
+    box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    // Exposed for automated checks: the exact string encoded in the symbol.
+    window.__qrPayload = PAGE_URL;
+    window.__qrModules = qr.getModuleCount();
+  } catch (err) {
+    console.error(err);
+    box.textContent = 'QR generation failed';
+    note.textContent = 'QR generation failed: ' + err.message;
+  }
+}
+
+/* ------------------------------- boot ----------------------------- */
+
+(async function main() {
+  renderQr();
+  try {
+    await loadConfig();
+    buildRows();
+    await loadModel();
+    setStatus('Model ready. Tap "Start rear camera", or upload a photo.');
+
+    // Self test:  ?selftest=1  classifies check_image.jpg once the model is ready.
+    const params = new URLSearchParams(location.search);
+    if (params.get('selftest')) {
+      const res = await fetch('check_image.jpg');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      uploadPreview.dataset.objectUrl = url;
+      await showAndClassifyImage(url, 'Self test with check_image.jpg');
+      window.__selftestDone = true;
+      window.__selftestProbs = lastSource;
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus('Could not start: ' + err.message, true);
+  }
+})();
+</script>
+</body>
+</html>
