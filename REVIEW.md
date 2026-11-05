@@ -9,7 +9,7 @@ I opened the page on my phone and pointed the camera at a leaf. The screenshot s
 ![Screenshot from my phone](screenshot.jpg)
 
 ## 2. The same numbers as the notebook
-I uploaded `check_image.jpg` on the page (the page also has a self test with `?selftest=1`).
+I checked `check_image.jpg` with the self test of the page (`?selftest=1`). It loads the image and sends it through the same code as the photo upload button, then shows the probabilities.
 
 | Class | Notebook (`check_expected.json`) | Page |
 |---|---|---|
@@ -18,7 +18,7 @@ I uploaded `check_image.jpg` on the page (the page also has a self test with `?s
 | chestnut | 0.002456 | 0.002456 |
 | maple | 0.0000037 | 0.0000037 |
 
-They are the same to three decimals (the difference is smaller than 0.00001). I checked this on my computer in Chrome and on the live page.
+They are the same to three decimals (the difference is smaller than 0.00001). I checked this on my computer in Chrome, once with the local files and once on the live page.
 
 **What was fixed:** at first the photo upload did not work. The page deleted the image link before it used the image. The agent fixed this and the check passed after that.
 

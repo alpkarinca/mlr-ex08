@@ -28,14 +28,15 @@ I used a coding agent for the code and kept the code simple. Every variant is th
 | **Augmentation + cosine, 30 epochs** | 75.0 ± 5.8 | 71.3 ± 3.7 | **72.2 ± 2.8** |
 | Augmentation + cosine 30 + label smoothing + AdamW | 75.0 ± 5.1 | 69.8 ± 1.9 | 68.9 ± 2.7 |
 
-Rows with last years' photographs as **extra training data** (these runs were stopped early, so there are fewer seeds):
+Rows with last years' photographs (their 700 training photos) as **extra training data**:
 
 | Variant | Seeds | Val | Camera-like | Last year* |
 |---|---|---|---|---|
-| Baseline + last years' photos | 2 | 76.8 ± 5.4 | 64.1 ± 0.9 | 89.6 ± 1.3 |
-| Augmentation + cosine 30 + smoothing + AdamW + last years' photos | 1 | 82.1 | 78.2 | 92.5 |
+| Baseline + last years' photos | 3 | 76.2 ± 4.5 | 64.6 ± 1.1 | 89.7 ± 1.0 |
+| Augmentation + cosine 30 + last years' photos | 1 | 82.1 | 75.7 | 91.7 |
+| **Augmentation + cosine 30 + smoothing + AdamW + last years' photos** | 3 | **82.1 ± 0.0** | **76.2 ± 1.4** | 92.5 ± 0.7 |
 
-\* Here the last-year test photos come from the same year as the extra training photos (other students, but the same kind of photos). So these numbers are too good and cannot be compared with the other rows. One seed has no standard deviation.
+\* Here the last-year test photos come from the same year as the extra training photos (other students, but the same kind of photos). So this column is too good and cannot be compared with the other rows. Only val and camera-like can be compared. The row with 1 seed has no standard deviation (I stopped the remaining runs).
 
 ## How big is the noise?
 - One validation photo is worth 1/28 = **3.6 points**. The seeds differ by 2–9 points (the baseline has ± 7.3 on val). So differences smaller than about 5–7 points on val are **not reliable**.
@@ -48,7 +49,7 @@ Rows with last years' photographs as **extra training data** (these runs were st
 - **Only last layer trained:** not better on val, but better on camera-like (+6) and last year (+5), and the seeds differ less (± 1–3). Training only the last layer is stable.
 - **Augmentation + cosine scheduler + 30 epochs:** the best of the complete rows. Val 75, camera-like 71, last year 72. The last-year gain (+19 points) is clearly bigger than the noise. The camera-like gain (+8) is bigger than the noise too. The val gain (+6) is not.
 - **More epochs and cosine scheduler alone (no augmentation):** no gain. So the gain above comes from the augmentation together with the longer training.
-- **Last years' photos as extra training data:** the val accuracy goes up (77–82), but the last-year result cannot be compared (see the note). On the camera-like set the baseline did not improve (64), the combination had 78 with only 1 seed. I would need more seeds to say more.
+- **Last years' photos as extra training data:** with the baseline it helps val (+7, same size as the noise) but not the camera-like set (65). Together with augmentation, cosine, smoothing and AdamW it gives the best val (82.1, the same in all 3 seeds = 23 of 28 photos) and the best camera-like result (76.2 vs. 69.8 without the extra photos, +6 with seeds that differ by only ± 2). I think more training data really helps here. But val has only 28 photos and the camera-like set comes from the same 28 photos, so I am not completely sure. The last-year column cannot be used for this comparison (see the note).
 
 ## What did not help
 - Label smoothing, AdamW and dropout 0.5: all a bit worse or the same as the baseline, within the noise.
@@ -57,12 +58,15 @@ Rows with last years' photographs as **extra training data** (these runs were st
 - Global average pooling: not tried. MobileNet already has global average pooling inside, so there is nothing to change.
 
 ## Which model for the phone
-I would take **augmentation (geometric + colour) + cosine scheduler + 30 epochs**. It is the best complete row on camera-like and last year, and it needs only a few extra lines. Adding last years' photos looks promising, but I have only 1–2 seeds for it.
+I would take **augmentation (geometric + colour) + cosine scheduler + 30 epochs + label smoothing + AdamW, trained with last years' photos added**. It is the best row on val (82.1) and on the camera-like set (76.2), with 3 seeds. The second choice is the same without last years' photos (val 75.0, camera-like 69.8, last year 68.9), if we want to use only our own photos. Among the rows without extra photos, plain "augmentation + cosine 30" is as good as the one with smoothing and AdamW, so those two options did not bring anything alone.
 
-Not done yet: I have **not** exported this model and tried it in the course camera app. I must do this myself before I hand in.
+I did not try this model in the course camera app, because I do not have this app. I also did not export it to ONNX or put it on my own page, so it is only tested on the three test sets above.
+
+## Code and raw numbers
+All variants were trained by one training function; each variant only changes a few options of it (augmentation, frozen layers, epochs, scheduler, smoothing, optimizer, dropout, extra data). The standard deviation in the tables is over the 3 seeds (population standard deviation).
 
 ## Limits
 - Very small validation set (28 photos).
 - The camera-like set comes from the same 28 photos.
-- Runs with last years' photos were stopped early.
+- The run "augmentation + cosine 30 + last years' photos" has only 1 seed.
 - The standard deviation is computed over 3 seeds only.
